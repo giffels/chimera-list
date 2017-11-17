@@ -101,7 +101,7 @@ def get_rows(con, cmd, itersize = 5000):
 root_magic = '000000000000000000000000000000000000'
 
 def pfnsid2inumber(pnfsid):
-	cmd = "select pnfsid2inumber('%s')" % root_magic
+	cmd = "select pnfsid2inumber('%s')" % pnfsid
 	return get_rows(con, cmd).next()[0]
 
 root_inumber_magic = pfnsid2inumber(root_magic)
