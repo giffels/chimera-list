@@ -79,8 +79,8 @@ def connect_db(host, port, db, user, passwd):
 	except ImportError:
 		log.critical('No psycopg2 module found, might help to install python-psycopg2')
 	except:
-		raise
 		log.critical('psycopg2: Connection to database failed')
+		raise
 
 con = connect_db(opts.host, opts.port, opts.database,
 	config.get('username', opts.username), config.get('password', opts.password))
@@ -99,11 +99,18 @@ def get_rows(con, cmd, itersize = 5000):
 			yield result
 
 root_magic = '000000000000000000000000000000000000'
-# Get the pnfsid of the given root directory
-def get_root(rootpath, parent = root_magic):
+
+def pfnsid2inumber(pnfsid):
+	cmd = "select pnfsid2inumber('%s')" % root_magic
+	return get_rows(con, cmd).next()[0]
+
+root_inumber_magic = pfnsid2inumber(root_magic)
+
+# Get the inumber of the given root directory
+def get_root(rootpath, parent = root_inumber_magic):
 	rootpath = rootpath.strip('/').split('/', 1)
 	rootdir = rootpath[0]
-	cmd = "select ipnfsid from t_dirs where iname like '%s' and iparent = '%s'" % (rootdir, parent)
+	cmd = "select path2inumber(%s, '%s')" % (parent, rootdir)
 	try:
 		result = get_rows(con, cmd).next()[0]
 	except:
@@ -112,40 +119,31 @@ def get_root(rootpath, parent = root_magic):
 		return get_root(rootpath[1], result)
 	return result
 
-rootpnfsid = get_root(opts.root)
-log.info('Rootdir used: %s %s\n' % (opts.root, rootpnfsid))
+root_inumber = get_root(opts.root)
+log.info('Rootdir used: %s %s\n' % (opts.root, root_inumber))
 
 # The dictionary with all dir pathes and their pnfsids as keys
-dirs = {rootpnfsid: opts.root}
+dirs = {root_inumber: opts.root}
 
-# Returns full PFN belonging to a parent entry
-def search_parent(pnfsid, parent_list = []):
-	if pnfsid not in dirs: # Use cached result if available
-		if pnfsid not in parent_list: # Detect circular references
-			# Look up (name, parent) belonging to pnfsid
-			cmd = "select iname,iparent from t_dirs where ipnfsid = '%s' and iname not in ('.','..')" % pnfsid
-			try:
-				entry = get_rows(con, cmd).next()
-			except:
-				entry = None
-			if entry: # catch orphaned entries => pnfsid is used as parent but has no entry
-				(name, parent) = entry
-				parent_path = search_parent(parent, parent_list + [pnfsid])
-				if parent_path != None:
-					parent_path += '/' + name
-				dirs[pnfsid] = parent_path
-			elif pnfsid != root_magic:
-				log.warning('Error: orphaned entry detected: %s' % pnfsid)
+# Returns full PFN belonging to a parent inumber
+def search_parent(inumber):
+	if inumber not in dirs: # Use cached result if available
+		cmd = "select inumber2path(%s)" % inumber
+		try:
+			entry = get_rows(con, cmd).next()[0]
+		except:
+			pass
 		else:
-			log.warning('Error: circular reference detected: %r' % parent_list)
-	return dirs.setdefault(pnfsid, None)
+			dirs[inumber] = entry
+
+	return dirs.setdefault(inumber, None)
 
 # Create raw chimera dump
 def write_dump_raw(fn):
 	log.info('dCache dump  started at: %s' % repr(time.localtime()[0:6]))
-	cmd = "select t_dirs.ipnfsid,iname,iparent,isize,ilocation,date_part('epoch', t_inodes.iatime),isum"
+	cmd = "select t_inodes.ipnfsid,iname,iparent,isize,ilocation,date_part('epoch', t_inodes.iatime),isum"
 	cmd += ' from t_inodes,t_locationinfo,t_dirs,t_inodes_checksum'
-	cmd += ' where t_dirs.ipnfsid = t_locationinfo.ipnfsid and t_dirs.ipnfsid = t_inodes.ipnfsid and t_dirs.ipnfsid = t_inodes_checksum.ipnfsid'
+	cmd += ' where t_dirs.ichild = t_locationinfo.inumber and t_dirs.ichild = t_inodes.inumber and t_dirs.ichild = t_inodes_checksum.inumber'
 
 	fp = open(fn, 'w')
 	for (pnfsid, name, parent, size, location, atime, cksum) in get_rows(con, cmd):
